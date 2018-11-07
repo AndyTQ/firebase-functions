@@ -183,20 +183,23 @@ export interface Runnable<T> {
   run: (data: T, context: any) => PromiseLike<any> | any;
 }
 
+// TODO(tinaliang): export different types here?
 /**
  * An HttpsFunction is both an object that exports its trigger definitions at __trigger and
  * can be called as a function that takes an express.js Request and Response object.
  */
-export type HttpsFunction = TriggerAnnotated &
-  ((req: Request, resp: Response) => void);
+export type HttpsFunction = TriggerAnnotated & HttpsFunctionWithoutTrigger;
+
+
+export type HttpsFunctionWithoutTrigger = ((req: Request, resp: Response) => void);
 
 /**
  * A CloudFunction is both an object that exports its trigger definitions at __trigger and
  * can be called as a function using the raw JS API for Google Cloud Functions.
  */
-export type CloudFunction<T> = Runnable<T> &
-  TriggerAnnotated &
-  ((input: any, context?: any) => PromiseLike<any> | any);
+export type CloudFunction<T> = TriggerAnnotated & CloudFunction<T>;
+
+export type CloudFunctionWithoutTrigger<T> = Runnable<T> & ((input: any, context?: any) => PromiseLike<any> | any);
 
 /** @internal */
 export interface MakeCloudFunctionArgs<EventData> {
@@ -216,6 +219,55 @@ export interface MakeCloudFunctionArgs<EventData> {
 
 /** @internal */
 export function makeCloudFunction<EventData>({
+  provider,
+  eventType,
+  triggerResource,
+  service,
+  dataConstructor = (raw: Event) => raw.data,
+  handler,
+  before = () => {
+    return;
+  },
+  after = () => {
+    return;
+  },
+  legacyEventType,
+  opts = {},
+}: MakeCloudFunctionArgs<EventData>): CloudFunction<EventData> {
+  let cloudFunction = makeCloudFunctionWithoutTrigger({
+    provider,
+    eventType,
+    triggerResource,
+    service,
+    dataConstructor,
+    handler,
+    before,
+    after,
+    legacyEventType,
+    opts,
+  });
+
+  Object.defineProperty(cloudFunction, '__trigger', {
+    get: () => {
+      let trigger: any = _.assign(optsToTrigger(opts), {
+        eventTrigger: {
+          resource: triggerResource(),
+          eventType: legacyEventType || provider + '.' + eventType,
+          service,
+        },
+      });
+
+      return trigger;
+    },
+  });
+
+  cloudFunction.run = handler;
+  return cloudFunction;
+}
+
+// TODO(tinaliang): remove the creation of __trigger, don't care if set, nothing is done w/ it.
+/** @internal */
+export function makeCloudFunctionWithoutTrigger<EventData>({
   provider,
   eventType,
   triggerResource,
@@ -293,20 +345,6 @@ export function makeCloudFunction<EventData>({
       return cloudFunctionNewSignature(data, context);
     };
   }
-
-  Object.defineProperty(cloudFunction, '__trigger', {
-    get: () => {
-      let trigger: any = _.assign(optsToTrigger(opts), {
-        eventTrigger: {
-          resource: triggerResource(),
-          eventType: legacyEventType || provider + '.' + eventType,
-          service,
-        },
-      });
-
-      return trigger;
-    },
-  });
 
   cloudFunction.run = handler;
   return cloudFunction;
